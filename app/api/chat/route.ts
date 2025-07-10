@@ -1,160 +1,113 @@
-import { BedrockAgentRuntimeClient, InvokeAgentCommand } from "@aws-sdk/client-bedrock-agent-runtime"
+import {
+  BedrockAgentRuntimeClient,
+  InvokeAgentCommand,
+} from "@aws-sdk/client-bedrock-agent-runtime";
 
-export const maxDuration = 30
+export const maxDuration = 30;
 
-// Initialize Bedrock Agent Runtime Client with better error handling
 const bedrockAgentClient = new BedrockAgentRuntimeClient({
   region: process.env.AWS_REGION!,
   credentials: {
     accessKeyId: process.env.AWS_ACCESS_KEY_ID!,
     secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY!,
   },
-})
+});
 
 export async function POST(req: Request) {
   try {
-    const { messages } = await req.json()
-    console.log("Received messages:", messages)
+    const { messages } = await req.json();
+    console.log("Received messages:", messages);
 
-    // Get the latest user message
-    const userMessage = messages[messages.length - 1]?.content || ""
-    console.log("User message:", userMessage)
+    const userMessage = messages[messages.length - 1]?.content || "";
+    console.log("User message:", userMessage);
 
-    // Validate environment variables
-    const agentId = process.env.BEDROCK_AGENT_ID
-    const agentAliasId = process.env.BEDROCK_AGENT_ALIAS_ID || "TSTALIASID"
-    const region = process.env.AWS_REGION
-
-    console.log("Agent configuration:", { agentId, agentAliasId, region })
+    const agentId = process.env.BEDROCK_AGENT_ID;
+    const agentAliasId = process.env.BEDROCK_AGENT_ALIAS_ID || "TSTALIASID";
 
     if (!agentId) {
-      throw new Error("BEDROCK_AGENT_ID environment variable is required")
+      throw new Error("BEDROCK_AGENT_ID environment variable is required");
     }
 
-    if (!process.env.AWS_ACCESS_KEY_ID || !process.env.AWS_SECRET_ACCESS_KEY) {
-      throw new Error("AWS credentials are required")
-    }
-
-    // Generate a unique session ID
-    const sessionId = `session-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
-    console.log("Session ID:", sessionId)
+    const sessionId = `session-${Date.now()}-${Math.random()
+      .toString(36)
+      .substr(2, 9)}`;
 
     const command = new InvokeAgentCommand({
       agentId,
       agentAliasId,
       sessionId,
       inputText: userMessage,
-    })
+    });
 
-    console.log("Invoking Bedrock Agent...")
-    const response = await bedrockAgentClient.send(command)
-    console.log("Agent response received")
+    console.log("Invoking Bedrock Agent...");
+    const response = await bedrockAgentClient.send(command);
 
-    // Create a readable stream from the agent response
-    const encoder = new TextEncoder()
+    // Collect the full response first (since Bedrock Agent sends it as one chunk)
+    let fullResponse = "";
+    if (response.completion) {
+      for await (const chunk of response.completion) {
+        if (chunk.chunk?.bytes) {
+          const text = new TextDecoder().decode(chunk.chunk.bytes);
+          fullResponse += text;
+        }
+      }
+    }
+
+    console.log(
+      "Full response received, now streaming word by word:",
+      fullResponse
+    );
+
+    // Now stream word by word to simulate real streaming
+    const encoder = new TextEncoder();
     const stream = new ReadableStream({
       async start(controller) {
         try {
-          let fullResponse = ""
+          // Split into words for more natural streaming
+          const words = fullResponse.split(" ");
 
-          if (response.completion) {
-            for await (const chunk of response.completion) {
-              console.log("Processing chunk:", chunk)
+          for (let i = 0; i < words.length; i++) {
+            const word = words[i] + (i < words.length - 1 ? " " : "");
+            console.log("Streaming word:", word);
 
-              if (chunk.chunk?.bytes) {
-                const text = new TextDecoder().decode(chunk.chunk.bytes)
-                fullResponse += text
-                console.log("Chunk text:", text)
+            // Send each word in AI SDK data stream format
+            controller.enqueue(encoder.encode(`0:${JSON.stringify(word)}\n`));
 
-                // Send chunk in AI SDK compatible format
-                const data = {
-                  id: `chunk-${Date.now()}`,
-                  object: "chat.completion.chunk",
-                  created: Date.now(),
-                  model: "bedrock-agent",
-                  choices: [
-                    {
-                      index: 0,
-                      delta: { content: text },
-                      finish_reason: null,
-                    },
-                  ],
-                }
-                controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`))
-              }
-            }
-          } else {
-            console.log("No completion in response")
-            // If no streaming completion, send a default message
-            const fallbackText = "I received your message but couldn't generate a response."
-            const data = {
-              id: `chunk-${Date.now()}`,
-              object: "chat.completion.chunk",
-              created: Date.now(),
-              model: "bedrock-agent",
-              choices: [
-                {
-                  index: 0,
-                  delta: { content: fallbackText },
-                  finish_reason: null,
-                },
-              ],
-            }
-            controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`))
+            // Realistic typing delay (100-200ms per word)
+            await new Promise((resolve) => setTimeout(resolve, 150));
           }
 
-          console.log("Full response:", fullResponse)
-
-          // Send final chunk
-          const finalData = {
-            id: `chunk-${Date.now()}`,
-            object: "chat.completion.chunk",
-            created: Date.now(),
-            model: "bedrock-agent",
-            choices: [
-              {
-                index: 0,
-                delta: {},
-                finish_reason: "stop",
-              },
-            ],
-          }
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify(finalData)}\n\n`))
-          controller.enqueue(encoder.encode("data: [DONE]\n\n"))
-          controller.close()
-        } catch (streamError) {
-          console.error("Streaming error:", streamError)
-          controller.error(streamError)
+          // Send end marker
+          controller.close();
+        } catch (error) {
+          console.error("Streaming error:", error);
+          controller.error(error);
         }
       },
-    })
+    });
 
     return new Response(stream, {
       headers: {
-        "Content-Type": "text/event-stream",
+        "Content-Type": "text/plain; charset=utf-8",
+        "x-vercel-ai-data-stream": "v1",
         "Cache-Control": "no-cache",
         Connection: "keep-alive",
       },
-    })
+    });
   } catch (error) {
-    console.error("Detailed error invoking Bedrock Agent:", error)
+    console.error("Detailed error invoking Bedrock Agent:", error);
 
-    // Return more detailed error information
-    const errorMessage = error instanceof Error ? error.message : "Unknown error"
-    const errorDetails = {
-      error: "Failed to invoke Bedrock Agent",
-      details: errorMessage,
-      timestamp: new Date().toISOString(),
-      config: {
-        hasAgentId: !!process.env.BEDROCK_AGENT_ID,
-        hasCredentials: !!(process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY),
-        region: process.env.AWS_REGION,
-      },
-    }
-
-    return new Response(JSON.stringify(errorDetails), {
-      status: 500,
-      headers: { "Content-Type": "application/json" },
-    })
+    const errorMessage =
+      error instanceof Error ? error.message : "Unknown error";
+    return new Response(
+      JSON.stringify({
+        error: "Failed to invoke Bedrock Agent",
+        details: errorMessage,
+      }),
+      {
+        status: 500,
+        headers: { "Content-Type": "application/json" },
+      }
+    );
   }
 }
