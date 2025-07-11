@@ -26,10 +26,9 @@ export default function BedrockAgentChat() {
       },
     });
 
-  console.log("error", error, messages);
   return (
     <div className="flex items-center justify-center min-h-screen bg-gradient-to-br from-purple-50 to-blue-100 p-4">
-      <Card className="w-full max-w-4xl h-[80vh] flex flex-col shadow-xl">
+      <Card className="w-full max-w-4xl min-h-[80vh] flex flex-col shadow-xl">
         <CardHeader className="border-b bg-white/50 backdrop-blur-sm">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">

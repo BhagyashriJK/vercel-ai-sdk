@@ -28,15 +28,14 @@ export async function POST(req: Request) {
       throw new Error("BEDROCK_AGENT_ID environment variable is required");
     }
 
-    const sessionId = `session-${Date.now()}-${Math.random()
-      .toString(36)
-      .substr(2, 9)}`;
+    const sessionId = "session-122132";
 
     const command = new InvokeAgentCommand({
       agentId,
       agentAliasId,
       sessionId,
       inputText: userMessage,
+      enableTrace: true,
     });
 
     console.log("Invoking Bedrock Agent...");
@@ -49,6 +48,9 @@ export async function POST(req: Request) {
         if (chunk.chunk?.bytes) {
           const text = new TextDecoder().decode(chunk.chunk.bytes);
           fullResponse += text;
+        }
+        if (chunk.trace) {
+          console.log("trace", chunk.trace?.trace);
         }
       }
     }
